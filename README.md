@@ -1,216 +1,256 @@
 # ConnectionMiner — FlyWire Visual System
 
-**Connectome-constrained deconvolution of visual neuron types from FlyWire single-cell RNA-seq**
+**Connectome-constrained deconvolution of visual neuron types from FlyWire single-cell RNA-seq.**
 
-ConnectionMiner jointly infers neuronal type identities and synaptic gene interaction programs from single-cell transcriptomics data, using the measured synaptic connectome as a structural constraint. This fork adapts the original pipeline (motor system, ~730 types) for the **FlyWire visual system** (741 visual neuron types, ~110k cells).
-
----
-
-## Overview
-
-A core challenge in single-cell genomics of the nervous system is that many cells in a dataset are replicates of the same neuron type — but type identity is not directly observed. ConnectionMiner addresses this by formulating type assignment and gene interaction inference as a joint optimization problem:
-
-- **P** — a soft assignment matrix mapping cells (via metacells) to neuron types, inferred via entropic optimal transport
-- **β** — a gene–gene interaction weight matrix encoding which gene pairs predict synaptic connectivity, inferred via multiplicative non-negative regression
-
-Both are optimized alternately, each step using the other as a fixed constraint, until convergence. The connectome (which neuron types are synaptically connected) serves as the supervisory signal throughout.
-
-### Pipeline
-
-```
-Raw scRNA-seq              Connectome
-(109k visual cells)        (741 × 741)
-        │                       │
-        ▼                       ▼
-  ┌────────────────────────────────────┐
-  │  1. Build RawData                  │
-  │     load h5ad · P_constraints     │
-  └──────────────┬─────────────────────┘
-                 │
-                 ▼
-  ┌────────────────────────────────────┐
-  │  2. Preprocess (binary)            │
-  │     binarise · select 3000 HVGs   │
-  │     build metacells (~6k)         │
-  └──────────────┬─────────────────────┘
-                 │
-                 ▼
-  ┌────────────────────────────────────┐
-  │  3. Solve (alternating)            │
-  │     P ← entropic OT (Sinkhorn)    │
-  │     β ← multiplicative regression │
-  └──────────────┬─────────────────────┘
-                 │
-                 ▼
-  ┌────────────────────────────────────┐
-  │  4. Postprocess + Export           │
-  │     type × gene probabilities      │
-  │     identifiability assessment     │
-  └──────────────┬─────────────────────┘
-                 │
-                 ▼
-  ┌────────────────────────────────────┐
-  │  5. Interactive Visualizations     │
-  │     Plotly HTML (WebGL)            │
-  └────────────────────────────────────┘
-```
+This is the FlyWire adaptation of ConnectionMiner, a method from [Gupta et al. (2025)](https://doi.org/10.1101/2025.03.04.640006) that jointly infers neuronal type identities and synaptic gene interaction programs from scRNA-seq, using the measured connectome as a structural constraint.
 
 ---
 
-## Repository Structure
+## Problem Statement
+
+Given a scRNA-seq dataset (109k cells) and a synaptic connectome (741×741 type-level wiring diagram), ConnectionMiner solves a joint optimization to infer:
+
+1. **Cell-type assignments (P)** — a soft assignment of each cell (via metacells) to neuron types, constrained by connectome-derived priors and enforced via entropic optimal transport.
+2. **Gene interaction matrix (β)** — a non-negative matrix quantifying how gene co-expression patterns predict synaptic connectivity, regularized with L1 sparsity.
+
+The core modeling assumption is that the observed connectome **C** can be reconstructed as:
+
+> C_recon = P @ G @ β @ Gᵀ @ Pᵀ
+
+where **G** is the metacell-level binarized gene expression (detection probability). The solver alternates between updating P (Sinkhorn with backtracking line search) and updating β (multiplicative NMF-style updates) to minimize reconstruction error + regularization.
+
+---
+
+## Repository Layout
 
 ```
 connectionMiner/
-├── cm_visual/                  # Python pipeline package (visual system)
-│   ├── run_visual.py           # Core pipeline entrypoint
-│   ├── config.py               # Default configuration (741 types, 3000 HVGs)
-│   ├── paths.py                # Data path resolution
-│   ├── models.py               # Data containers (RawData, PrepData, CmResult)
-│   ├── preprocess.py           # HVG selection + metacell construction
-│   ├── solver.py               # Alternating P / β optimisation
-│   ├── postprocess.py          # Type–gene probabilities + identifiability
-│   ├── exports.py              # Excel export (type-gene table)
-│   ├── viz_plotly.py           # 6 interactive Plotly visualizations
-│   ├── validate.py             # Shape/value invariant checks
-│   ├── utils.py                # Shared helpers
-│   └── runs/                   # Output directory (timestamped, gitignored)
-├── run_flywire.py              # CLI entrypoint
-├── output/                     # Pre-built matrices (symlink, gitignored)
-│   ├── C_matrix.npz            # 741×741 binary visual connectome
-│   ├── P_constraints_cells.npz # 741×109k cell type constraints
-│   ├── cell_index.csv          # Cell metadata (barcode, tier, annotation)
-│   ├── type_index.csv          # 741 type names
-│   ├── gene_index.csv          # 3000 HVG names
-│   └── Adult.h5ad              # Raw expression + t-SNE coords (109k cells)
-├── requirements.txt
-└── README.md
+├── cm_visual/                      # Core pipeline Python package
+│   ├── __init__.py                 # Exports cm_run_visual
+│   ├── run_visual.py               # Pipeline entrypoint orchestrating steps A–I
+│   ├── config.py                   # Default config (HVG count, solver params, etc.)
+│   ├── paths.py                    # Legacy motor-system paths (deprecated for FlyWire)
+│   ├── models.py                   # RawData, PrepData, CmResult dataclasses
+│   ├── preprocess.py               # HVG or custom gene selection + metacell construction (PCA+K-means)
+│   ├── solver.py                   # Alternating β update (multiplicative regression) / P update (entropic OT Sinkhorn)
+│   ├── postprocess.py              # Type×gene probabilities + identifiability scoring
+│   ├── exports.py                  # Excel export of type×gene probabilities
+│   ├── viz_plotly.py               # 6 interactive Plotly HTML dashboards
+│   ├── validate.py                 # Shape/value invariant checks at each pipeline stage
+│   └── utils.py                    # JSON/MAT export, z-score, helpers
+├── scripts/                        # CLI entry points
+│   ├── build_all_matrices.py       # Matrix construction from raw data (steps 1–10)
+│   ├── run_flywire.py              # Main pipeline CLI
+│   └── run_ablation.py             # Ablation experiment orchestrator (10 experiments)
+├── data/                           # Input data (gitignored large files)
+│   ├── Adult.h5ad                  # Raw scRNA-seq (109k cells × ~15k genes)
+│   ├── connections_princeton.csv.gz# Synapse-level connectome (FlyWire)
+│   ├── visual_neuron_types.csv.gz  # Neuron type metadata
+│   ├── consolidated_anchor_types.csv # Anchor type annotations
+│   └── gene_list/                  # Curated gene lists for ablation experiments
+│       ├── TFs_groups.xlsx
+│       ├── cell adhesion molecules_new.xlsx
+│       └── Interactome_v3.xlsx
+├── output/                         # Pre-built solver matrices (generated by build_all_matrices.py)
+├── requirements.txt                # Python dependencies
+├── experiments.md                  # Ablation experiment documentation
+├── plan.md                         # Implementation status
+└── README.md                       # This file
 ```
 
 ---
 
-## Installation
+## Pipeline Overview
 
-**Python ≥ 3.9** required.
+```
+scRNA-seq (109k cells)     Connectome (741×741)
+         │                        │
+         ▼                        ▼
+   ┌───────────────────────────────────────────┐
+   │ 1. Build Matrices (scripts/               │
+   │    build_all_matrices.py)                  │
+   │    Steps 1–10: C, G, P, metacells,        │
+   │    G_metacell_p, P_constraints, C_mask     │
+   ├───────────────────────────────────────────┤
+   │ 2. Run Solver (scripts/run_flywire.py)    │
+   │    A. Load pre-built matrices             │
+   │    B. Load h5ad → extract HVG expression  │
+   │    C. Build RawData                       │
+   │    D. Preprocess → metacells              │
+   │    E. Alternating solve:                  │
+   │       β ← multiplicative NMF regression   │
+   │       P ← entropic OT (Sinkhorn)          │
+   │    F. Type×gene probabilities             │
+   │    G. Export to Excel                     │
+   │    H. Save solver outputs (beta, P, loss) │
+   │    I. 6 Plotly visualizations             │
+   └───────────────────────────────────────────┘
+```
+
+---
+
+## How Each File Contributes
+
+### Matrix Construction (`scripts/build_all_matrices.py`)
+Produces every pre-built matrix the solver needs. 10 steps run sequentially:
+- **Step 1**: Load `Adult.h5ad` into memory
+- **Step 2**: Build **C** (741×741 binary connectome) from synapse data — maps pre/post synaptic type pairs
+- **Step 3**: Build **G_cells** (109k×3000 z-scored HVG expression) — used for clustering only
+- **Step 4**: Build **P_cells** (109k×741 row-stochastic type constraints) — assigns each cell a prior over possible types; cells are tiered as **named** (hard-annotated by FlyWire), **numeric** (ambiguous cluster IDs with cosine-similarity soft assignment), or **orphan** (unannotated, uniform over empty types)
+- **Step 5**: Build **B_cells** (gene covariance, reference only — not fed to solver)
+- **Step 6**: Build **metacells** (~8k) via tiered (named/numeric/orphan) PCA + K-means pooling
+- **Step 7**: Build **P_meta/G_meta** (diagnostic z-scored metacell representations)
+- **Step 8**: Build **G_metacell_p** (metacell × gene detection probabilities in [0,1]) — **this is the real solver's G**, binarized expression fraction per metacell
+- **Step 9**: Build **P_constraints** transposed to (N_types × n_cells / n_metacells) — binary support masks matching solver orientation
+- **Step 10**: Build **C_mask** — observed-entries mask (all ones: fully measured)
+
+### Preprocessing (`cm_visual/preprocess.py`)
+- **Binarization**: converts expression to binary (expressed/not)
+- **Gene selection**: picks HVGs by binomial variance, or uses a `custom_gene_idx` for ablation experiments
+- **Metacell construction**: groups cells by constraint signature, applies PCA + K-means per group (target ~15 cells/metacell), merges tiny clusters
+- **Output**: `PrepData` with metacell-level expression, constraints, and indexing
+
+### Solver (`cm_visual/solver.py`)
+The alternating optimization loop:
+1. **β update** (`cm_beta_update`): Given fixed P, solves min_β≥0 ‖W ⊙ (PGβGᵀPᵀ − C)‖²_F + λ‖β‖₁ via multiplicative NMF-style updates (with optional low-rank SVD projection and interactome hard masking)
+2. **P update** (`cm_P_update`): Given fixed β, solves min_P ‖W ⊙ (PZGᵀ − C)‖²_F + ε·H(P) via entropic Sinkhorn (exponentiated gradients with backtracking line search and row/column normalization)
+- Supports NumPy (CPU) and Torch (GPU) backends with auto-detection
+
+### Postprocessing (`cm_visual/postprocess.py`)
+- Computes type×gene probability matrix: G_type_prob = P @ G_metacell_p_all
+- Assigns each cell to its maximum-probability type
+- Scores type identifiability (total probability mass > 1e-10)
+
+### Validation (`cm_visual/validate.py`)
+Invariant checks at each stage: NaN/Inf detection, shape consistency, non-zero constraints, loss non-negativity.
+
+### Visualization (`cm_visual/viz_plotly.py`)
+6 interactive Plotly HTML files:
+1. **Raw MultiomeNN clusters** on UMAP
+2. **Cell type constraints** (named/numeric/orphan tiers)
+3. **Metacells** (colored by ID and size)
+4. **Inferred type assignments** (argmax + entropy)
+5. **Connectome fit** (reconstructed C vs true C heatmap + scatter)
+6. **Solver loss trajectory** (β, P_fit, P_entropy, total)
+
+### Ablation Experiments (`scripts/run_ablation.py`)
+Compares 10 gene-set configurations (HVG-3000, HVG-5000, TFs-only, adhesion molecules, interactome pairs, and their unions/intersections). Produces per-experiment outputs + a consolidated `viz_ablation_comparison.html` dashboard with loss trajectories, connectome fit metrics, beta sparsity, and runtime.
+
+---
+
+## Setup
 
 ```bash
-git clone https://github.com/aravindan2/connectionMiner.git
-cd connectionMiner
+# 1. Clone and install dependencies
 pip install -r requirements.txt
-pip install plotly kaleido anndata
+pip install anndata plotly
+
+# Optional: GPU acceleration
+pip install torch
+
+# 2. Verify data exists in data/
+ls data/
+# Should show: Adult.h5ad  connections_princeton.csv.gz  visual_neuron_types.csv.gz  ...
 ```
 
----
-
-## Data
-
-Pre-built matrices are expected in `./output/`. These include the binary visual connectome (741×741), cell-level type constraints, gene and cell indices, and `Adult.h5ad` with raw expression and t-SNE coordinates.
+Input data files are large and **not included in the repo**. They must be obtained separately (see Gupta et al. 2025 for data availability).
 
 ---
 
-## Running
+## How to Run
 
-All commands are run from the **repo root**.
-
-### Quick smoke test (2 iterations)
+### Step 1: Build matrices (required once)
 
 ```bash
+cd scripts
+python3 build_all_matrices.py
+```
+
+This produces all solver-required matrices in `output/`:
+`C_matrix.npz`, `C_mask.npy`, `G_matrix.npy`, `G_metacell_p.npy`, `P_matrix.npz`, `P_meta.npz`, `P_constraints_cells.npz`, `P_constraints_metacell.npz`, `cell_to_metacell.csv`, `metacell_index.csv`, `cell_index.csv`, `gene_index.csv`, `type_index.csv`, `B_matrix.npy`.
+
+### Step 2: Run the main pipeline
+
+```bash
+# Smoke test (2 iterations, quick validation)
 python3 run_flywire.py --num-iter 2 --smoke
-```
 
-### Full run (100 iterations)
-
-```bash
+# Full run (100 iterations, default sparsity)
 python3 run_flywire.py --num-iter 100 --lambda-sparsity 0.001
-```
 
-### Low-rank beta (faster, less expressive)
-
-```bash
+# Low-rank beta (reduce gene dimensionality)
 python3 run_flywire.py --num-iter 100 --beta-rank 50
 ```
+
+### Run ablation experiments
+
+```bash
+# All 10 experiments (20 iterations each)
+python3 run_ablation.py --num-iter 20
+
+# Quick smoke test (2 experiments, 2 iterations)
+python3 run_ablation.py --smoke
+```
+
+---
+
+## CLI Flags
+
+### `scripts/run_flywire.py`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output-dir` | `output` | Path to pre-built matrices directory |
+| `--h5ad` | `data/Adult.h5ad` | Path to h5ad file |
+| `--num-iter` | `100` | Solver iterations |
+| `--lambda-sparsity` | `0.001` | L1 penalty on β |
+| `--beta-rank` | `0` | Low-rank β dimension (0 = full rank) |
+| `--smoke` | off | Fast test mode (2 iters) |
+| `--seed` | `750` | Random seed |
+| `--time-limit` | `60` | Per-step timeout (seconds) |
+
+### `scripts/run_ablation.py`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--num-iter` | `20` | Solver iterations per experiment |
+| `--smoke` | off | Run 2 experiments × 2 iterations |
+| `--backend` | `auto` | Solver backend: `auto`, `numpy`, or `torch` |
 
 ---
 
 ## Outputs
 
-Solver outputs and visualizations are written to `output/connectionMiner_solve/`:
-
+### Main pipeline (`output/connectionMiner_solve/`)
 | File | Description |
-|---|---|
-| `beta_learned.npy` | 3000×3000 fitted gene interaction matrix |
-| `P_refined.npz` | 741×n_meta solver-refined type assignments |
-| `C_reconstructed.npy` | 741×741 reconstructed connectome |
+|------|-------------|
+| `beta_learned.npy` | Fitted gene interaction matrix (g×g) |
+| `P_refined.npz` | Refined type assignments (types×metacells) |
+| `C_reconstructed.npy` | Reconstructed connectome (types×types) |
 | `solver_loss.csv` | Per-iteration loss breakdown |
-| `cell_to_metacell_solver.npy` | Solver's internal metacell mapping |
-| `type_gene_probabilities.xlsx` | Inferred gene expression per type |
-| `viz_01_raw_clusters.html` | Raw MultiomeNN clusters on t-SNE |
-| `viz_02_cell_constraints.html` | Cell type constraints (named/numeric/orphan) |
-| `viz_03_metacells.html` | Metacells colored by ID and size |
-| `viz_04_inferred_types.html` | Inferred type assignments + entropy |
-| `viz_05_connectome_fit.html` | C vs C_hat heatmaps + scatter |
-| `viz_06_loss_trajectory.html` | Solver convergence curves |
-| `viz_combined_three_panel.html` | Combined 3-panel pipeline overview |
+| `cell_to_metacell_solver.npy` | Cell-to-metacell mapping |
+| `type_gene_probabilities.xlsx` | Type×gene probability scores |
+| `viz_01_raw_clusters.html` | Raw MultiomeNN clusters on UMAP |
+| `viz_02_cell_constraints.html` | Cell type constraint tiers |
+| `viz_03_metacells.html` | Metacell assignments |
+| `viz_04_inferred_types.html` | Inferred type + entropy |
+| `viz_05_connectome_fit.html` | C vs C_recon comparison |
+| `viz_06_loss_trajectory.html` | Solver convergence trace |
+
+### Ablation experiments (`output/connectionMiner_ablation/exp_NN_name/`)
+Same per-experiment outputs + consolidated `viz_ablation_comparison.html` dashboard comparing all 10 gene-set configurations.
 
 ---
 
-## Configuration
+## Method Details
 
-Default parameters are in `cm_visual/config.py`. Key settings:
-
-| Parameter | Default | Description |
-|---|---|---|
-| `seed` | `750` | Global random seed |
-| `binary.n_genes_use` | `3000` | Number of highly variable genes for solver |
-| `metacell.target_size` | `15` | Target cells per metacell |
-| `solver.num_iter` | `100` | Alternating optimisation iterations |
-| `solver.lambda_sparsity` | `0.001` | L1 sparsity penalty on β |
-| `solver.optimal_transport_epsilon` | `1e-12` | Entropic OT regularisation strength |
-| `solver.use_complement` | `False` | Disable complement features (avoid 6000×6000 β) |
-| `solver.use_binary_connectome` | `True` | Binarise C before fitting |
-
-Override any parameter via CLI flags:
-
-```bash
-python3 run_flywire.py --num-iter 200 --lambda-sparsity 0.01 --beta-rank 50
-```
-
----
-
-## Interactive Visualizations
-
-All plots use `Plotly Scattergl` (WebGL) for smooth rendering of 100k+ points and are saved as standalone HTML files.
-
-1. **Raw Clusters** — MultiomeNN clustering before ConnectionMiner processing
-2. **Cell Constraints** — Three constraint tiers: named (hard), numeric (ambiguous), orphan (unknown)
-3. **Metacells** — Metacell clusters colored by ID and size
-4. **Inferred Types** — Solver's type assignments with confidence entropy
-5. **Connectome Fit** — True vs reconstructed connectome with fit metrics
-6. **Loss Trajectory** — Solver convergence across iterations
-
-A combined 3-panel view (`viz_combined_three_panel.html`) shows the full pipeline flow: original clusters → metacells → inferred types.
-
----
-
-## Method Summary
-
-**Metacell construction.** Cells are first grouped by their *constraint signature* — the unique pattern of neuron types they could plausibly belong to. Within each group, PCA + K-means produces compact metacells (target size 15 cells). This reduces compute while preserving biological structure.
-
-**Joint optimisation.** The solver alternates between:
-
-1. **β update** — given the current type assignment P, find gene–gene interaction weights β that minimise weighted connectome reconstruction error plus an L1 sparsity term. Solved via multiplicative updates that preserve non-negativity.
-
-2. **P update** — given the current β, find soft type assignments P that minimise connectome reconstruction error plus an entropic regularisation term (encouraging uncertainty over plausible types). Solved via a Sinkhorn-style two-pass update with backtracking line search.
+1. **Metacells**: Cells sharing the same constraint signature are grouped via PCA + K-means (target ~15 cells/metacell). Named types form single-signature groups; numeric cells share constraint signatures; orphans are pooled separately.
+2. **β update**: Given soft type assignments P, find gene–gene interaction weights β that minimize connectome reconstruction error + L1 sparsity. Solved via multiplicative updates (coordinate descent in log-space with clip-to-nonnegativity).
+3. **P update**: Given β, find soft type assignments P that minimize reconstruction error + entropic regularization. Solved via Sinkhorn with backtracking line search, projected onto constraint support D.
+4. **Custom gene sets**: Ablation experiments bypass HVG selection using predefined lists (TFs, cell adhesion molecules, interactome pairs) to test biological interpretability of learned β.
 
 ---
 
 ## Citation
 
-If you use ConnectionMiner in your research, please cite the original paper:
-
 > Gupta, H.P., Azevedo, A., Chen, Y.-C.D., Xing, K., Sims, P.A., Varol, E., & Mann, R.S. (2025). **Decoding neuronal wiring by joint inference of cell identity and synaptic connectivity.** *bioRxiv*. https://doi.org/10.1101/2025.03.04.640006
-
----
-
-## License
-
-*To be added.*

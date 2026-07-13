@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -142,6 +143,13 @@ def cm_run_visual(
         "total_loss": cm.loss,
     })
     loss_df.to_csv(save_dir / "solver_loss.csv", index=False)
+
+    # Also copy the Excel export and solver objectives here for convenience
+    for fn in ["type_gene_probabilities.xlsx", "solver_objectives.txt"]:
+        src = run_dir / fn
+        if src.exists():
+            shutil.copy2(src, save_dir / fn)
+
     print(f"  Saved solver outputs to {save_dir}")
 
     # STEP I — Visualizations

@@ -2,16 +2,22 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+
+sys.path.insert(0, str(REPO_ROOT))
 
 from cm_visual.run_visual import cm_run_visual
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="FlyWire Visual System × ConnectionMiner")
-    parser.add_argument("--output-dir", default="output", help="Path to pre-built matrices directory")
-    parser.add_argument("--h5ad", default="output/Adult.h5ad", help="Path to Adult.h5ad")
+    parser.add_argument("--output-dir", default=str(REPO_ROOT / "output"), help="Path to pre-built matrices directory")
+    parser.add_argument("--h5ad", default=str(REPO_ROOT / "data" / "Adult.h5ad"), help="Path to Adult.h5ad")
     parser.add_argument("--num-iter", type=int, default=None, help="Number of solver iterations")
     parser.add_argument("--lambda-sparsity", type=float, default=None, help="Sparsity regularization")
     parser.add_argument("--beta-rank", type=int, default=None, help="Low-rank beta dimension (0=full)")

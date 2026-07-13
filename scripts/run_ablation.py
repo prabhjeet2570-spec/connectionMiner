@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy import sparse
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cm_visual.config import default_config, merge_config
 from cm_visual.exports import cm_export_type_gene_probabilities
@@ -29,10 +29,11 @@ from cm_visual.solver import cm_solve
 from cm_visual.validate import cm_validate
 from cm_visual.viz_plotly import run_all_visualizations
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = REPO_ROOT / "data"
 OUTPUT_DIR = REPO_ROOT / "output"
-H5AD_PATH = OUTPUT_DIR / "Adult.h5ad"
-GENE_LIST_DIR = REPO_ROOT / "Gene_list"
+H5AD_PATH = DATA_DIR / "Adult.h5ad"
+GENE_LIST_DIR = DATA_DIR / "gene_list"
 ABLATION_ROOT = OUTPUT_DIR / "connectionMiner_ablation"
 NUM_ITER = 20
 SEED = 750
