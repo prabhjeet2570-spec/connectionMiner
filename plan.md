@@ -1,48 +1,56 @@
-# Plan — ConnectionMiner on FlyWire
+# Metacell Clustering Ablation — Implementation Plan
 
-_Last updated: 2026-07-12_
+## Experiments: 2 gene sets × 6 clustering methods = 12
 
-## Status
+### Gene set (G)
+- `hvg_3000` — top 3,000 highly-variable genes
+- `tfs_adhesion` — 799 TFs + adhesion molecules (union)
 
-`scripts/build_all_matrices.py` completed successfully. All pre-built solver
-matrices are in `output/`.
+### Clustering method (P)
+- `kmeans` (baseline)
+- `minibatch_kmeans`
+- `ward` (agglomerative)
+- `gmm` (Gaussian mixture)
+- `hdbscan` (density-based)
+- `spectral` (sklearn SpectralClustering, affinity="nearest_neighbors")
 
-| Metric | Value |
-|---|---|
-| Cells | 109,743 |
-| Types | 741 |
-| Connectome density | 34,551 / 549,081 pairs (6.3%) |
-| HVGs | 3,000 |
-| Metacells | 7,979 (4,059 named / 1,986 numeric / 1,934 orphan) |
-| Output dir | `output/` |
+## Changes
 
-The solver has **not been run yet**.
+### 1. `cm_visual/preprocess.py`
+- Add `_get_clusterer(n_clusters, cfg, seed)` factory returning a `.fit_predict()`-compatible object
+- Replace hardcoded `KMeans(...)` in `_build_metacells_from_features` with `_get_clusterer(...)`
 
-## Confirmed facts
+### 2. `cm_visual/config.py`
+- Add `"cluster_method": "kmeans"` to the `metacell` config dict
 
-- `cm_visual` solver (`cm_visual.solver.cm_solve(prep, cfg)`) is ready in
-  `connectionMiner/cm_visual/` (fork `aravindan2/connectionMiner`).
-- Pre-built matrices in `output/` match the solver's expected input format
-  (non-negative G, transposed P constraints).
-- Dependencies installed: `numpy`, `scipy`, `pandas`, `scikit-learn`,
-  `matplotlib`, `openpyxl`, `plotly=5.24.1`, `anndata=0.12.16`.
-  `kaleido` is NOT needed (viz uses `write_html` only).
+### 3. `scripts/run_metacell_ablation.py`
+- Loop over 2 gene sets × 5 methods
+- Same structure as `run_ablation.py` (resolve genes, build RawData, call cm_preprocess_binary, call cm_solve, save outputs, compute stats)
+- Each experiment overrides `cfg["metacell"]["cluster_method"]`
 
-## Pipeline
+### 4. `scripts/build_clustering_explorer.py`
+- Parallel to `build_ablation_explorer.py`, reads from `clustering_ablation/` directory
+
+## Output
 
 ```
-1. scripts/build_all_matrices.py   → builds matrices to output/
-2. scripts/run_flywire.py          → loads matrices from output/, runs solver,
-                                     generates visualizations
+output/connectionMiner_ablation/
+└── clustering_ablation/
+    ├── exp_01_hvg_3000_kmeans/
+    ├── exp_02_hvg_3000_minibatch_kmeans/
+    ├── exp_03_hvg_3000_ward/
+    ├── exp_04_hvg_3000_gmm/
+    ├── exp_05_hvg_3000_hdbscan/
+    ├── exp_06_tfs_adhesion_kmeans/
+    ├── exp_07_tfs_adhesion_minibatch_kmeans/
+    ├── exp_08_tfs_adhesion_ward/
+    ├── exp_09_tfs_adhesion_gmm/
+    ├── exp_10_tfs_adhesion_hdbscan/
+    ├── exp_11_hvg_3000_spectral/
+    ├── exp_12_tfs_adhesion_spectral/
+    ├── all_stats.csv
+    ├── viz_ablation_comparison.html
+    └── viz_ablation_explorer.html
 ```
 
-## Next steps
-
-1. Run smoke test: `python3 scripts/run_flywire.py --num-iter 2 --smoke`
-2. Run full: `python3 scripts/run_flywire.py --num-iter 100 --lambda-sparsity 0.001`
-3. Optionally run ablation: `python3 scripts/run_ablation.py --num-iter 20`
-
-## Notes
-
-- HVG count: 3,000 (repo default 4,000) — deliberate FlyWire choice
-- Metacells: tiered named/numeric/orphan, 8k target (not repo's ~10/cell)
+Each experiment subdir: `beta_learned.npy`, `P_refined.npz`, `C_reconstructed.npy`, `cell_to_metacell_solver.npy`, `solver_loss.csv`, `run_stats.json`, `run_config.json`, visualizations.

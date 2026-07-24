@@ -4,6 +4,10 @@ cm_visual/runs/
 output/
 *.npy
 *.npz
+*.log
+
+# ── Data directory ───────────────────────────────────────────────────────────
+data/
 
 # ── Large input data (kept in Dropbox, not the repo) ─────────────────────────
 *.txt
@@ -49,6 +53,10 @@ Thumbs.db
 .Rhistory
 .RData
 .Rproj.user/
+
+# ── Markdown files (except README.md) ────────────────────────────────────────
+*.md
+!README.md
 
 # ── MATLAB (excluded entirely) ───────────────────────────────────────────────
 matlab/

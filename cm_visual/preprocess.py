@@ -5,8 +5,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, MiniBatchKMeans, AgglomerativeClustering, SpectralClustering
 from sklearn.decomposition import PCA
+from sklearn.mixture import GaussianMixture
 
 from .models import PrepData, RawData
 
@@ -95,6 +96,59 @@ def cm_preprocess_binary(raw: RawData, cfg: dict[str, Any]) -> PrepData:
     )
 
 
+def _get_clusterer(n_clusters: int, cfg: dict[str, Any], seed: int):
+    method = cfg.get("cluster_method", "kmeans")
+    if method == "kmeans":
+        return KMeans(
+            n_clusters=n_clusters,
+            n_init=int(cfg.get("kmeans_reps", 5)),
+            max_iter=int(cfg.get("kmeans_maxiter", 200)),
+            random_state=seed,
+        )
+    elif method == "minibatch_kmeans":
+        return MiniBatchKMeans(n_clusters=n_clusters, n_init=3, random_state=seed)
+    elif method == "ward":
+        return AgglomerativeClustering(n_clusters=n_clusters, linkage="ward")
+    elif method == "gmm":
+        return GaussianMixture(n_components=n_clusters, covariance_type="full", random_state=seed)
+    elif method == "hdbscan":
+        try:
+            import hdbscan
+        except ImportError:
+            raise ImportError(
+                "hdbscan is required for cluster_method='hdbscan'. "
+                "Install it with: pip install hdbscan"
+            )
+        return hdbscan.HDBSCAN(min_cluster_size=5, min_samples=1)
+    elif method == "spectral":
+        return SpectralClustering(n_clusters=n_clusters, random_state=seed, affinity="nearest_neighbors")
+    raise ValueError(f"Unknown cluster_method: {method}")
+
+
+def _assign_hdbscan_noise(labels: np.ndarray, score: np.ndarray) -> np.ndarray:
+    noise = labels == -1
+    if not np.any(noise):
+        return labels
+    valid = ~noise
+    unique_labels = np.unique(labels[valid])
+    if len(unique_labels) == 0:
+        return np.zeros_like(labels)
+    centers = np.zeros((len(unique_labels), score.shape[1]), dtype=float)
+    for i, k in enumerate(unique_labels):
+        centers[i] = np.mean(score[labels == k], axis=0)
+    noise_idx = np.where(noise)[0]
+    noise_points = score[noise]
+    dists = np.zeros((len(noise_idx), len(unique_labels)))
+    for i in range(len(unique_labels)):
+        diff = noise_points - centers[i]
+        dists[:, i] = np.sum(diff ** 2, axis=1)
+    nearest = np.argmin(dists, axis=1)
+    labels = labels.copy()
+    for ni, ni_idx in enumerate(noise_idx):
+        labels[ni_idx] = unique_labels[nearest[ni]]
+    return labels
+
+
 def _build_metacells_from_features(
     X_cells: np.ndarray,
     P_constraints_cells: sparse.csr_matrix,
@@ -126,13 +180,10 @@ def _build_metacells_from_features(
         X = X_cells[np.asarray(idx_cells, dtype=int), :].astype(float)
 
         score = _pca_features(X, metacell_cfg.get("n_pcs", 50), seed)
-        kmeans = KMeans(
-            n_clusters=K,
-            n_init=int(metacell_cfg.get("kmeans_reps", 5)),
-            max_iter=int(metacell_cfg.get("kmeans_maxiter", 200)),
-            random_state=seed,
-        )
-        labels = kmeans.fit_predict(score)
+        clusterer = _get_clusterer(K, metacell_cfg, seed)
+        labels = clusterer.fit_predict(score)
+        if metacell_cfg.get("cluster_method", "kmeans") == "hdbscan":
+            labels = _assign_hdbscan_noise(labels, score)
         labels = _merge_tiny_clusters(labels, score, int(metacell_cfg["min_size"]))
 
         n_local = int(labels.max()) + 1

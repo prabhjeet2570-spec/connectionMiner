@@ -26,6 +26,7 @@ def default_config(input_mode: str = "binary") -> dict[str, Any]:
             "min_size": 5,
             "min_samples_prior": 10,
             "n_pcs": 50,
+            "cluster_method": "kmeans",
             "kmeans_reps": 5,
             "kmeans_maxiter": 200,
         },
